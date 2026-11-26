@@ -6,7 +6,7 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var VERSION = "6";
+  var VERSION = "7";
   var FIELDS = ["so", "kyhieu", "ngay", "coquan", "trichyeu"];
   var pending = null;
 
@@ -78,38 +78,113 @@
     return ocrWorker;
   }
 
-  // Render trang 1 thành ảnh, OCR phần đầu trang (60% phía trên), trả về các "từ" có toạ độ như khi đọc PDF có chữ
-  async function ocrItems(page) {
+  // Làm rõ ảnh scan: chuyển xám + kéo giãn độ tương phản (nền xám -> trắng, chữ -> đen)
+  function enhance(canvas) {
+    var ctx = canvas.getContext("2d");
+    var img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    var d = img.data, hist = new Array(256).fill(0), i;
+    for (i = 0; i < d.length; i += 4) {
+      var g = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) | 0;
+      d[i] = d[i + 1] = d[i + 2] = g; hist[g]++;
+    }
+    var total = d.length / 4, acc = 0, lo = 0, hi = 255;
+    for (lo = 0; lo < 255; lo++) { acc += hist[lo]; if (acc > total * 0.01) break; }
+    acc = 0;
+    for (hi = 255; hi > 0; hi--) { acc += hist[hi]; if (acc > total * 0.15) break; }
+    var range = Math.max(1, hi - lo);
+    for (i = 0; i < d.length; i += 4) {
+      var v = ((d[i] - lo) * 255 / range) | 0;
+      d[i] = d[i + 1] = d[i + 2] = v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  function flattenWords(data) {
+    if (data && data.words && data.words.length) return data.words;
+    var out = [];
+    ((data && data.blocks) || []).forEach(function (b) {
+      (b.paragraphs || []).forEach(function (p) {
+        (p.lines || []).forEach(function (l) { (l.words || []).forEach(function (w) { out.push(w); }); });
+      });
+    });
+    return out;
+  }
+
+  // Render trang 1 thành ảnh (nền trắng), chỉ giữ 60% phía trên, làm rõ ảnh
+  async function renderForOcr(page) {
     var scale = 3;
     var vp = page.getViewport({ scale: scale });
-    var canvas = document.createElement("canvas");
-    canvas.width = Math.floor(vp.width);
-    canvas.height = Math.floor(vp.height);
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    var full = document.createElement("canvas");
+    full.width = Math.floor(vp.width);
+    full.height = Math.floor(vp.height);
+    var fctx = full.getContext("2d");
+    fctx.fillStyle = "#ffffff";
+    fctx.fillRect(0, 0, full.width, full.height);
+    await page.render({ canvasContext: fctx, viewport: vp }).promise;
+    var cropH = Math.floor(full.height * 0.6);
+    var crop = document.createElement("canvas");
+    crop.width = full.width; crop.height = cropH;
+    crop.getContext("2d").drawImage(full, 0, 0, full.width, cropH, 0, 0, full.width, cropH);
+    enhance(crop);
+    return { canvas: crop, scale: scale, pageHpx: full.height };
+  }
+
+  // Chạy OCR 1 lần với 1 chế độ phân tích trang (psm)
+  async function ocrPass(worker, rendered, psm) {
+    await worker.setParameters({ tessedit_pageseg_mode: psm, preserve_interword_spaces: "1" });
+    var res = await worker.recognize(rendered.canvas);
+    var words = flattenWords(res.data).filter(function (w) {
+      return w.text && w.text.trim() && w.bbox && w.confidence >= 30;
+    });
+    var sc = rendered.scale, H = rendered.pageHpx, conf = 0;
+    var items = words.map(function (w) {
+      var bb = w.bbox; conf += w.confidence;
+      return {
+        s: w.text,
+        x: bb.x0 / sc,
+        y: (H - (bb.y0 + bb.y1) / 2) / sc, // tâm dòng, ổn định hơn đáy chữ
+        w: (bb.x1 - bb.x0) / sc,
+        h: (bb.y1 - bb.y0) / sc,
+        b: false
+      };
+    });
+    return {
+      items: items, psm: psm, nWords: words.length,
+      conf: words.length ? Math.round(conf / words.length) : 0,
+      raw: ((res.data && res.data.text) || "").trim()
+    };
+  }
+
+  function score(r) {
+    return (r.so || r.kyhieu ? 1 : 0) + (r.ngay ? 1 : 0) + (r.coquan ? 1 : 0) + (r.trichyeu ? 1 : 0);
+  }
+
+  // Thử lần lượt các chế độ OCR, lấy kết quả tốt nhất
+  async function ocrAndParse(page, width) {
+    setStatus("Đang chuẩn bị ảnh để OCR...", "");
+    var rendered = await renderForOcr(page);
     ocrCb = function (m) {
       var label = OCR_TEXT[m.status] || "Đang xử lý OCR";
       var pct = (typeof m.progress === "number") ? " " + Math.round(m.progress * 100) + "%" : "";
       setStatus(label + pct + "...", "");
     };
     var worker = await getOcrWorker();
-    var res = await worker.recognize(canvas, {
-      rectangle: { left: 0, top: 0, width: canvas.width, height: Math.floor(canvas.height * 0.6) }
-    });
+    var modes = ["6", "3", "11"], best = null, log = [];
+    for (var i = 0; i < modes.length; i++) {
+      if (i > 0) setStatus("Chưa đọc đủ thông tin, thử chế độ nhận dạng khác (" + (i + 1) + "/" + modes.length + ")...", "");
+      var pass = await ocrPass(worker, rendered, modes[i]);
+      var r = pass.items.length ? parse(pass.items, width) : null;
+      var sc = r ? score(r) : 0;
+      log.push("Chế độ " + pass.psm + ": " + pass.nWords + " từ, tin cậy TB " + pass.conf + "%, đọc được " + sc + "/4 mục");
+      if (!best || sc > best.sc || (sc === best.sc && pass.nWords > best.pass.nWords)) best = { r: r, sc: sc, pass: pass };
+      if (sc >= 3) break;
+    }
     ocrCb = null;
-    var words = (res && res.data && res.data.words) || [];
-    return words.filter(function (w) {
-      return w.text && w.text.trim() && w.confidence >= 30;
-    }).map(function (w) {
-      var bb = w.bbox;
-      return {
-        s: w.text,
-        x: bb.x0 / scale,
-        y: (canvas.height - (bb.y0 + bb.y1) / 2) / scale, // tâm dòng, ổn định hơn đáy chữ
-        w: (bb.x1 - bb.x0) / scale,
-        h: (bb.y1 - bb.y0) / scale,
-        b: false
-      };
-    });
+    var dbg = "(Đã dùng OCR cho file scan)\nẢnh OCR: " + rendered.canvas.width + "x" + rendered.canvas.height +
+      " px\n" + log.join("\n") + "\n\n--- Chữ OCR thô (chế độ " + best.pass.psm + ") ---\n" +
+      (best.pass.raw || "(trống)").split("\n").filter(function (x) { return x.trim(); }).slice(0, 25).join("\n") +
+      "\n\n" + (best.r ? best.r.debug : "");
+    return { r: best.r, nWords: best.pass.nWords, debug: dbg };
   }
 
   async function handleFile(file) {
@@ -130,23 +205,27 @@
           return { s: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: i.height, b: !!boldMap[i.fontName] };
         });
       var totalChars = items.reduce(function (n, i) { return n + i.s.replace(/\s/g, "").length; }, 0);
-      var scanned = false;
+      var scanned = false, r, debugText;
       if (totalChars < 80) {
         // Không có lớp chữ -> PDF scan -> dùng OCR
         scanned = true;
         setStatus("PDF này là bản scan, đang nhận dạng chữ (OCR). Lần đầu có thể mất 30-60 giây...", "");
-        items = await ocrItems(page);
-        if (!items.length) {
+        var o = await ocrAndParse(page, width);
+        r = o.r; debugText = o.debug;
+        if (!r) {
           clearForm();
-          $("dbg").textContent = "";
-          setStatus("OCR không nhận dạng được chữ. Hãy điền tay.", "warn");
+          $("dbg").textContent = debugText;
+          $("dbgBox").open = true;
+          setStatus("OCR không đọc được chữ nào. Hãy điền tay (xem chi tiết bên dưới).", "warn");
           return;
         }
+      } else {
+        r = parse(items, width); debugText = r.debug;
       }
-      var r = parse(items, width);
       FIELDS.forEach(function (f) { $(f).value = r[f] || ""; });
-      $("dbg").textContent = (scanned ? "(Đã dùng OCR cho file scan)\n" : "") + r.debug;
+      $("dbg").textContent = debugText;
       var empty = FIELDS.filter(function (f) { return !r[f]; }).length;
+      $("dbgBox").open = empty >= 3;
       var msg = empty ? "Đã điền tự động, còn " + empty + " ô trống - vui lòng kiểm tra." :
         "Đã điền đủ các ô - vui lòng kiểm tra lại trước khi lưu.";
       if (scanned) msg += " (File scan: OCR có thể sai dấu/chữ, hãy kiểm tra kỹ.)";
@@ -485,5 +564,5 @@
     }
   }
 
-  if (typeof module !== "undefined") module.exports = { parse: parse };
+  if (typeof module !== "undefined") module.exports = { parse: parse, ocrAndParse: ocrAndParse };
 })();
