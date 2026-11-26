@@ -6,6 +6,7 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
+  var VERSION = "6";
   var FIELDS = ["so", "kyhieu", "ngay", "coquan", "trichyeu"];
   var pending = null;
 
@@ -14,6 +15,7 @@
     Office.onReady(function () {
       pdfjsLib.GlobalWorkerOptions.workerSrc =
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      if ($("ver")) $("ver").textContent = "Phiên bản " + VERSION;
       var drop = $("drop"), fileInput = $("file");
       drop.addEventListener("click", function () { fileInput.click(); });
       fileInput.addEventListener("change", function () {
@@ -165,32 +167,57 @@
   // Ký tự không cho phép đặt tên file -> dấu "."
   function cleanName(t) { return (t || "").replace(/[\\\/:*?"<>|]/g, "."); }
 
-  function toLines(items) {
+  function rowsOf(items) {
     var sorted = items.slice().sort(function (a, b) { return b.y - a.y || a.x - b.x; });
-    var clusters = [], cur = null;
+    var rows = [], cur = null;
     sorted.forEach(function (it) {
-      if (!cur || Math.abs(cur.y - it.y) > Math.max(3, 0.4 * (it.h || 0))) { cur = { y: it.y, parts: [] }; clusters.push(cur); }
+      if (!cur || Math.abs(cur.y - it.y) > Math.max(3, 0.4 * (it.h || 0))) { cur = { y: it.y, parts: [] }; rows.push(cur); }
       cur.parts.push(it);
     });
-    return clusters.map(function (l) {
-      l.parts.sort(function (a, b) { return a.x - b.x; });
-      var t = "", prev = null, total = 0, boldN = 0;
-      l.parts.forEach(function (p) {
-        var s = p.s;
-        if (prev) {
-          var gap = p.x - (prev.x + prev.w);
-          var combining = /^[\u0300-\u036f]/.test(s);
-          if (!combining && !/\s$/.test(prev.s) && !/^\s/.test(s) && gap > Math.max(1, 0.1 * (p.h || 0))) t += " ";
-        }
-        t += s; prev = p;
-        var n = s.replace(/\s/g, "").length; total += n; if (p.b) boldN += n;
-      });
-      return {
-        text: t.replace(/\s+/g, " ").trim().normalize("NFC"),
-        bold: total > 0 && boldN / total > 0.5,
-        y: l.y, x: l.parts[0].x
-      };
-    }).filter(function (l) { return l.text; });
+    rows.forEach(function (r) { r.parts.sort(function (a, b) { return a.x - b.x; }); });
+    return rows;
+  }
+
+  function buildLine(parts, y) {
+    var t = "", prev = null, total = 0, boldN = 0;
+    parts.forEach(function (p) {
+      var s = p.s;
+      if (prev) {
+        var gap = p.x - (prev.x + prev.w);
+        var combining = /^[\u0300-\u036f]/.test(s);
+        if (!combining && !/\s$/.test(prev.s) && !/^\s/.test(s) && gap > Math.max(1, 0.1 * (p.h || 0))) t += " ";
+      }
+      t += s; prev = p;
+      var n = s.replace(/\s/g, "").length; total += n; if (p.b) boldN += n;
+    });
+    return {
+      text: t.replace(/\s+/g, " ").trim().normalize("NFC"),
+      bold: total > 0 && boldN / total > 0.5,
+      y: y, x: parts[0].x
+    };
+  }
+
+  // Mỗi hàng chữ thành 1 dòng đầy đủ
+  function toLines(items) {
+    return rowsOf(items).map(function (r) { return buildLine(r.parts, r.y); })
+      .filter(function (l) { return l.text; });
+  }
+
+  // Tách mỗi hàng thành các cụm chữ cách nhau xa (cột trái / cột phải của phần đầu trang)
+  function toSegments(items) {
+    var out = [];
+    rowsOf(items).forEach(function (r) {
+      var seg = [r.parts[0]];
+      for (var i = 1; i < r.parts.length; i++) {
+        var prev = r.parts[i - 1], cur = r.parts[i];
+        if (cur.x - (prev.x + prev.w) > 14) {
+          out.push(buildLine(seg, r.y)); seg = [cur];
+        } else seg.push(cur);
+      }
+      out.push(buildLine(seg, r.y));
+    });
+    return out.filter(function (l) { return l.text; })
+      .sort(function (a, b) { return b.y - a.y || a.x - b.x; });
   }
 
   function isStop(text) {
@@ -206,14 +233,22 @@
     return s;
   }
 
-  var ACRONYMS = ["UBND", "HĐND", "MTTQ", "UBMTTQ", "TNHH", "CP", "TP", "TW", "BQL", "VP", "TCT", "NHNN", "BHXH", "VNPT", "EVN", "PCCC", "HTX"];
+  var VOW = "AÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬEÈÉẺẼẸÊỀẾỂỄỆIÌÍỈĨỊOÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢUÙÚỦŨỤƯỪỨỬỮỰYỲÝỶỸỴ";
+  var SYLLABLE = new RegExp("^(NGH|NG|NH|PH|TH|TR|CH|GH|GI|KH|QU|[BCDĐGHKLMNPQRSTVX])?[" + VOW + "]+(CH|NG|NH|C|M|N|P|T)?$");
   var SMALL = { "ty": 1, "của": 1, "và": 1, "về": 1, "cho": 1, "tại": 1, "trên": 1, "trong": 1, "với": 1 };
+  function isAcronym(w) {
+    var u = w.toUpperCase();
+    if (/^(I{1,3}|IV|VI{0,3}|IX|X{1,3})$/.test(u)) return true;  // số La Mã
+    if (/\d/.test(u)) return true;
+    return !SYLLABLE.test(u);                                    // không giống 1 âm tiết tiếng Việt -> viết tắt
+  }
   function titleCaseVN(s) {
     if (s !== s.toUpperCase()) return s; // đã có chữ thường -> giữ nguyên
-    return s.toLowerCase().split(" ").map(function (w, i) {
-      if (ACRONYMS.indexOf(w.toUpperCase()) >= 0) return w.toUpperCase();
-      if (i > 0 && SMALL[w]) return w;
-      return w.charAt(0).toUpperCase() + w.slice(1);
+    return s.split(" ").map(function (w, i) {
+      if (isAcronym(w)) return w;
+      var lw = w.toLowerCase();
+      if (i > 0 && SMALL[lw]) return lw;
+      return lw.charAt(0).toUpperCase() + lw.slice(1);
     }).join(" ");
   }
 
@@ -249,15 +284,15 @@
   function findSo(left, full) {
     var i, t, m;
     for (i = 0; i < left.length; i++) {
-      if (/^s[o0][:;.,]?[.…_]*\d*[.…_]*[\/|]/.test(plain(left[i].text))) {
+      if (/^s[o0][:;.,]?[.…_]*\d*[.…_]*[\/|\-]/.test(plain(left[i].text))) {
         var sq = squeeze(left[i].text).normalize("NFC");
-        m = sq.match(/^S[^\d\/|]{0,3}?[:：;,]?[.…_]*(\d*)[.…_]*[\/|](.+)$/i);
+        m = sq.match(/^S[^\d\/|]{0,3}?[:：;,]?[.…_]*(\d*)[.…_]*[\/|\-–](.+)$/i);
         if (m) return { so: m[1], kyhieu: fixKy(m[2]), y: left[i].y };
       }
     }
     for (i = 0; i < full.length; i++) {
       t = full[i].text.replace(/\s*-\s*/g, "-").replace(/\s*\/\s*/g, "/");
-      m = t.match(/^S[^\s\d\/]{0,3}\s*[:：]?\s*[.…_]*(\d*)[.…_]*\s*\/([^\s,]+)/i);
+      m = t.match(/^S[^\s\d\/]{0,3}\s*[:：]?\s*[.…_]*(\d*)[.…_]*\s*[\/\-–]([^\s,]+)/i);
       if (m) return { so: m[1], kyhieu: fixKy(m[2]), y: full[i].y };
     }
     return null;
@@ -286,7 +321,7 @@
   }
 
   // ---------- Cơ quan ban hành ----------
-  var PARENT = /^(BỘ|UBND|ỦY BAN|CHÍNH PHỦ|QUỐC HỘI|TỈNH|THÀNH PHỐ|THÀNH ỦY|TỈNH ỦY|HUYỆN ỦY|QUẬN ỦY|HUYỆN|QUẬN|THỊ XÃ|SỞ|TỔNG LIÊN ĐOÀN)(\s|$)/;
+  var PARENT = /^(ĐẢNG BỘ|ĐẢNG ỦY|BỘ|UBND|ỦY BAN|CHÍNH PHỦ|QUỐC HỘI|TỈNH|THÀNH PHỐ|THÀNH ỦY|TỈNH ỦY|HUYỆN ỦY|QUẬN ỦY|HUYỆN|QUẬN|THỊ XÃ|SỞ|TỔNG LIÊN ĐOÀN)(\s|$)/;
 
   function findAgency(left, soY) {
     var cand = left.filter(function (l) {
@@ -334,6 +369,7 @@
     var orig = full[k].text;
     var text = orig.replace(/^\s*(V\s*[\/l|1!]\s*v|V\S{0,2}\s*vi\S{0,2}c)\s*[:.\-]?\s*/i, "");
     if (text === orig) text = orig.replace(/^.{3,8}?[:.]\s*/, "");
+    text = text.replace(/^(V\S{0,2}\s*vi\S{0,2}c)\s*[:.\-]?\s*/i, "");
     var rest = collect(full, k + 1, 5, "vv");
     return capFirst((text + " " + rest.join(" ")).replace(/\s+/g, " ").trim());
   }
@@ -359,8 +395,9 @@
   // ---------- Hàm chính ----------
   function parse(items, width) {
     var full = toLines(items);
-    var left = toLines(items.filter(function (i) { return i.x < width * 0.48; }));
-    var right = toLines(items.filter(function (i) { return i.x >= width * 0.45; }));
+    var segs = toSegments(items);
+    var left = segs.filter(function (l) { return l.x < width * 0.48; });
+    var right = segs.filter(function (l) { return l.x >= width * 0.45; });
     var endY = headerEndY(full);
     var fz = zone(full, endY), lz = zone(left, endY), rz = zone(right, endY);
     var out = { so: "", kyhieu: "", ngay: "", coquan: "", trichyeu: "" };
