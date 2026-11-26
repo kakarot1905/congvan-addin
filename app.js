@@ -6,7 +6,7 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var VERSION = "8";
+  var VERSION = "10";
   var FIELDS = ["so", "kyhieu", "ngay", "coquan", "trichyeu"];
   var pending = null;
 
@@ -45,12 +45,16 @@
       document.addEventListener("drop", function (e) { e.preventDefault(); });
       $("btnCancel").addEventListener("click", function () { clearForm(); setStatus("", ""); $("dbg").textContent = ""; });
       $("btnSave").addEventListener("click", onSave);
+      FIELDS.forEach(function (f) { $(f).addEventListener("input", updateFileName); });
+      $("btnCopy").addEventListener("click", copyFileName);
+      $("tenfile").addEventListener("input", function () { tenfileManual = true; updateFileNote(); });
+      updateFileNote();
       $("btnBack").addEventListener("click", function () { stopWaiting(); });
     });
   }
 
   function setStatus(msg, cls) { var s = $("status"); s.textContent = msg; s.className = cls || ""; }
-  function clearForm() { FIELDS.forEach(function (f) { $(f).value = ""; }); }
+  function clearForm() { FIELDS.forEach(function (f) { $(f).value = ""; }); if ($("tenfile")) { $("tenfile").value = ""; tenfileManual = false; updateFileNote(); } }
 
   // ---------- Đọc PDF ----------
   async function getBoldMap(page, tc) {
@@ -242,6 +246,7 @@
         if (aiErr) debugText = "(AI lỗi: " + aiErr + " -> dùng cách đọc thường)\n" + debugText;
       }
       FIELDS.forEach(function (f) { $(f).value = r[f] || ""; });
+      updateFileName();
       $("dbg").textContent = debugText;
       var empty = FIELDS.filter(function (f) { return !r[f]; }).length;
       $("dbgBox").open = empty >= 3;
@@ -254,6 +259,68 @@
     } catch (e) {
       setStatus("Lỗi đọc file: " + (e && e.message ? e.message : e), "err");
     }
+  }
+
+  // ---------- Tên file PDF gợi ý ----------
+  // Mẫu: <số>.<ký hiệu> ngày <d.m.yy> - <trích yếu>   (ký hiệu: "/" -> "-"; phần nào trống thì bỏ)
+  function buildFileName(v) {
+    var so = (v.so || "").trim();
+    var ky = (v.kyhieu || "").trim().replace(/[\\\/:*?"<>|]/g, "-");
+    var base = so && ky ? so + "." + ky : (so || ky);
+    var ngayPart = "";
+    var ng = (v.ngay || "").trim();
+    if (ng) {
+      var m = ng.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})$/);
+      ngayPart = m ? "ngày " + (+m[1]) + "." + (+m[2]) + "." + m[3].slice(-2) : "ngày " + cleanName(ng);
+    }
+    var ty = cleanName((v.trichyeu || "").replace(/\s+/g, " ").trim());
+    var head = [base, ngayPart].filter(Boolean).join(" ");
+    var name = head && ty ? head + " - " + ty : (head || ty);
+    return name.normalize("NFC").replace(/[\s.]+$/, "");
+  }
+
+  var FILE_LIMIT = 150;
+  var tenfileManual = false; // true khi bạn tự gõ sửa trong ô tên file (chưa bị các ô phía trên ghi đè)
+
+  function updateFileNote() {
+    var note = $("fileNote"), el = $("tenfile");
+    if (!note || !el) return;
+    var n = el.value.length;
+    if (n > FILE_LIMIT) {
+      note.textContent = "⚠ Lưu ý: tên file dài " + n + " ký tự, vượt quá " + FILE_LIMIT + " ký tự (quá " + (n - FILE_LIMIT) + " ký tự). Hãy rút gọn trước khi đổi tên.";
+      note.style.color = "#c62828"; note.style.fontWeight = "600";
+    } else {
+      note.textContent = "Số ký tự: " + n + " / " + FILE_LIMIT + " (chưa tính đuôi .pdf)";
+      note.style.color = "#666"; note.style.fontWeight = "400";
+    }
+  }
+
+  // Ghép lại tên file từ 5 ô phía trên (ghi đè nội dung đã sửa tay)
+  function updateFileName() {
+    var el = $("tenfile"); if (!el) return;
+    var v = {};
+    FIELDS.forEach(function (f) { v[f] = $(f).value; });
+    el.value = buildFileName(v);
+    tenfileManual = false;
+    updateFileNote();
+  }
+
+  function copyFileName() {
+    var el = $("tenfile");
+    if (!el.value) { setStatus("Chưa có tên file để sao chép.", "warn"); return; }
+    var ok = false;
+    try { el.focus(); el.select(); ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    var done = function () {
+      var over = el.value.length > FILE_LIMIT;
+      setStatus("Đã sao chép tên file. Chọn file PDF, bấm F2 rồi dán (Ctrl+V) để đổi tên." +
+        (over ? " Lưu ý: tên đang dài " + el.value.length + " ký tự, vượt " + FILE_LIMIT + "." : ""), over ? "warn" : "ok");
+    };
+    if (ok) done();
+    else if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.value).then(done, function () {
+        setStatus("Không sao chép tự động được, hãy bôi đen ô tên file và bấm Ctrl+C.", "warn");
+      });
+    } else setStatus("Không sao chép tự động được, hãy bôi đen ô tên file và bấm Ctrl+C.", "warn");
   }
 
   // ---------- Chế độ AI Claude (tùy chọn) ----------
@@ -333,7 +400,7 @@
   function fromAI(j) {
     var out = { so: "", kyhieu: "", ngay: "", coquan: "", trichyeu: "" };
     out.so = String(j.so || "").trim().replace(/[\/\-]+$/, "");
-    out.kyhieu = cleanName(String(j.ky_hieu || "").trim());
+    out.kyhieu = String(j.ky_hieu || "").trim();
     var m = String(j.ngay_ban_hanh || "").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (m && validDate(m[1], m[2])) out.ngay = pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
     out.coquan = String(j.co_quan_ban_hanh || "").trim();
@@ -593,7 +660,7 @@
     var out = { so: "", kyhieu: "", ngay: "", coquan: "", trichyeu: "" };
 
     var so = findSo(lz, fz);
-    if (so) { out.so = so.so; out.kyhieu = cleanName(so.kyhieu); }
+    if (so) { out.so = so.so; out.kyhieu = so.kyhieu; }
     out.ngay = findDate(fz, rz);
     out.coquan = findAgency(lz, so ? so.y : null);
     out.trichyeu = cleanName(findTrichYeu(full));
@@ -607,9 +674,9 @@
 
   // ---------- Lưu ----------
   function onSave() {
+    if (!tenfileManual) updateFileName();
     pending = {};
     FIELDS.forEach(function (f) { pending[f] = $(f).value.trim(); });
-    pending.kyhieu = cleanName(pending.kyhieu);
     pending.trichyeu = cleanName(pending.trichyeu);
     $("formView").style.display = "none";
     $("wait").style.display = "block";
@@ -666,14 +733,14 @@
         Office.EventType.DocumentSelectionChanged, { handler: onSelect }, function () {});
       $("wait").style.display = "none";
       $("formView").style.display = "block";
-      clearForm();
+      FIELDS.forEach(function (f) { $(f).value = ""; });
       $("dbg").textContent = "";
-      setStatus("Đã lưu. Có thể chọn file công văn tiếp theo.", "ok");
+      setStatus("Đã lưu. Tên file bên dưới vẫn còn để bạn sao chép; có thể chọn file công văn tiếp theo.", "ok");
     } catch (e) {
       pending = p;
       setStatus("Lỗi khi ghi vào Excel: " + (e && e.message ? e.message : e), "err");
     }
   }
 
-  if (typeof module !== "undefined") module.exports = { parse: parse, ocrAndParse: ocrAndParse, aiExtract: aiExtract, fromAI: fromAI, _s: SETTINGS };
+  if (typeof module !== "undefined") module.exports = { parse: parse, ocrAndParse: ocrAndParse, aiExtract: aiExtract, fromAI: fromAI, buildFileName: buildFileName, _s: SETTINGS };
 })();
