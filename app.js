@@ -153,43 +153,70 @@
     }).join(" ");
   }
 
+  // ---------- Vùng đầu trang ----------
+  var LOAI = ["thongbao", "quyetdinh", "baocao", "kehoach", "totrinh", "chithi", "nghiquyet", "huongdan",
+    "giaymoi", "thumoi", "congdien", "chuongtrinh", "dean", "phuongan", "quyche", "quydinh", "bienban",
+    "hopdong", "thoathuan", "thongcao", "ketluan", "thongtri", "giaygioithieu", "thungo", "nghidinh"];
+
+  function isVv(p) { return /^(v\/v|veviec)/.test(p); }
+  function isLoai(p) { return LOAI.indexOf(p.replace(/[:.]+$/, "")) >= 0; }
+
+  function isAllUpper(t) {
+    var letters = t.replace(/[^A-Za-zÀ-ỹĐđ]/g, "");
+    return letters.length >= 3 && letters === letters.toUpperCase();
+  }
+
+  // Phần đầu trang kết thúc tại dòng đầu tiên là: tên loại (QUYẾT ĐỊNH...), "V/v", "Kính gửi" hoặc "Căn cứ".
+  // Số, ngày, cơ quan CHỈ được tìm phía trên vị trí này -> không bao giờ lấy nhầm từ thân văn bản.
+  function headerEndY(full) {
+    var lim = Math.min(full.length, 30);
+    for (var k = 0; k < lim; k++) {
+      var p = plain(full[k].text);
+      if (/^(kinhgui|cancu)/.test(p) || isVv(p) || isLoai(p)) return full[k].y;
+    }
+    return full.length > 12 ? full[12].y : -1e9;
+  }
+  function zone(lines, endY) { return lines.filter(function (l) { return l.y > endY + 1; }); }
+
   // ---------- Số / ký hiệu ----------
   function fixKy(s) { return s.replace(/[.,;:]+$/, "").replace(/^\d{4}\//, ""); }
 
+  // Cho phép số bị bỏ trống: "Số: /QĐ-HVTP"
   function findSo(left, full) {
     var i, t, m;
-    for (i = 0; i < Math.min(left.length, 15); i++) {
-      if (/^so[:;.]?\d+\//.test(plain(left[i].text))) {
+    for (i = 0; i < left.length; i++) {
+      if (/^so[:;.]?[.…_]*\d*[.…_]*\//.test(plain(left[i].text))) {
         var sq = squeeze(left[i].text).normalize("NFC");
-        m = sq.match(/^[^\d]{0,4}(\d+)\/(.+)$/);
+        m = sq.match(/^S[^\d\/]{0,3}?[:：]?[.…_]*(\d*)[.…_]*\/(.+)$/i);
         if (m) return { so: m[1], kyhieu: fixKy(m[2]), y: left[i].y };
       }
     }
-    for (i = 0; i < Math.min(full.length, 15); i++) {
+    for (i = 0; i < full.length; i++) {
       t = full[i].text.replace(/\s*-\s*/g, "-").replace(/\s*\/\s*/g, "/");
-      m = t.match(/(?:^|\s)S[^\s\d]{0,3}\s*[:：]?\s*(\d+)\/([^\s,]+)/i);
+      m = t.match(/^S[^\s\d\/]{0,3}\s*[:：]?\s*[.…_]*(\d*)[.…_]*\s*\/([^\s,]+)/i);
       if (m) return { so: m[1], kyhieu: fixKy(m[2]), y: full[i].y };
     }
     return null;
   }
 
   // ---------- Ngày ban hành ----------
-  function validDate(d, m, y) { return +d >= 1 && +d <= 31 && +m >= 1 && +m <= 12; }
+  function validDate(d, m) { return +d >= 1 && +d <= 31 && +m >= 1 && +m <= 12; }
 
+  // Chỉ lấy khi có đủ ngày + tháng + năm; thiếu thì để trống
   function findDate(full, right) {
     var i, m, p;
-    for (i = 0; i < Math.min(full.length, 25); i++) {
+    for (i = 0; i < full.length; i++) {
       p = plain(full[i].text);
       m = p.match(/ngay(\d{1,2})thang(\d{1,2})nam(\d{4})/);
-      if (m && validDate(m[1], m[2], m[3])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
+      if (m && validDate(m[1], m[2])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
     }
-    for (i = 0; i < Math.min(right.length, 15); i++) {
+    for (i = 0; i < right.length; i++) {
       m = right[i].text.match(/(\d{1,2})\D{1,12}?(\d{1,2})\D{1,12}?((?:19|20)\d{2})/);
-      if (m && validDate(m[1], m[2], m[3])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
+      if (m && validDate(m[1], m[2])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
     }
-    for (i = 0; i < Math.min(full.length, 25); i++) {
+    for (i = 0; i < full.length; i++) {
       m = full[i].text.match(/(\d{1,2})[\/.\-](\d{1,2})[\/.\-]((?:19|20)\d{2})/);
-      if (m && validDate(m[1], m[2], m[3])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
+      if (m && validDate(m[1], m[2])) return pad(m[1]) + "/" + pad(m[2]) + "/" + m[3];
     }
     return "";
   }
@@ -198,11 +225,12 @@
   var PARENT = /^(BỘ|UBND|ỦY BAN|CHÍNH PHỦ|QUỐC HỘI|TỈNH|THÀNH PHỐ|THÀNH ỦY|TỈNH ỦY|HUYỆN ỦY|QUẬN ỦY|HUYỆN|QUẬN|THỊ XÃ|SỞ|TỔNG LIÊN ĐOÀN)(\s|$)/;
 
   function findAgency(left, soY) {
-    if (soY === null) return "";
     var cand = left.filter(function (l) {
-      if (l.y <= soY + 3) return false;
+      if (soY !== null && l.y <= soY + 3) return false;
       if (/^[-–—_.\s]+$/.test(l.text)) return false;
       if (/C[ỘO]NG H[ÒO]A|Đ[ỘO]C L[ẬA]P/i.test(l.text)) return false;
+      if (/^so[:;.]?[.…_]*\d*[.…_]*\//.test(plain(l.text))) return false;
+      if (soY === null && !isAllUpper(l.text)) return false;
       return l.text.replace(/[^A-Za-zÀ-ỹĐđ]/g, "").length >= 2;
     });
     if (!cand.length) return "";
@@ -221,43 +249,45 @@
   }
 
   // ---------- Trích yếu ----------
-  var LOAI = ["thongbao", "quyetdinh", "baocao", "kehoach", "totrinh", "chithi", "nghiquyet", "huongdan",
-    "giaymoi", "thumoi", "congdien", "chuongtrinh", "dean", "phuongan", "quyche", "quydinh", "bienban",
-    "hopdong", "thoathuan", "thongcao", "ketluan", "thongtri", "giaygioithieu", "thungo", "nghidinh"];
-
-  function collect(full, from, max) {
-    var out = [];
+  // mode "vv": dừng ở dòng IN HOA (vd "GIÁM ĐỐC HỌC VIỆN...") hoặc "Căn cứ/Kính gửi"
+  // mode "loai": dòng đầu được IN HOA, nhưng dừng khi chuyển từ chữ thường sang IN HOA
+  function collect(full, from, max, mode) {
+    var out = [], prevUpper = null;
     for (var n = from; n < full.length && out.length < max; n++) {
-      if (isStop(full[n].text)) break;
-      out.push(full[n].text);
+      var t = full[n].text;
+      if (isStop(t)) break;
+      var up = isAllUpper(t);
+      if (mode === "vv" && up) break;
+      if (mode === "loai" && up && prevUpper === false) break;
+      out.push(t); prevUpper = up;
     }
     return out;
   }
 
-  function findTrichYeu(full, soY) {
-    var limit = Math.min(full.length, 45), k, p;
-    // 1) Dòng "V/v ..." hoặc "Về việc ..."
-    for (k = 0; k < limit; k++) {
-      if (soY !== null && full[k].y > soY + 3) continue;
-      p = plain(full[k].text);
-      if (/^(v\/v|veviec)/.test(p)) {
-        var orig = full[k].text;
-        var text = orig.replace(/^\s*(V\s*\/\s*v|Về\s*việc)\s*[:.\-]?\s*/i, "");
-        if (text === orig) text = orig.replace(/^.{3,8}?[:.]\s*/, "");
-        var rest = collect(full, k + 1, 4);
-        return (text + " " + rest.join(" ")).replace(/\s+/g, " ").trim();
-      }
-    }
-    // 2) Văn bản có tên loại (THÔNG BÁO, QUYẾT ĐỊNH...) -> trích yếu là các dòng ngay bên dưới
-    for (k = 0; k < limit; k++) {
-      if (soY !== null && full[k].y > soY + 3) continue;
-      if (LOAI.indexOf(plain(full[k].text)) >= 0) {
-        var lines = collect(full, k + 1, 6).map(sentenceCase);
+  function capFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+  function takeVv(full, k) {
+    var orig = full[k].text;
+    var text = orig.replace(/^\s*(V\s*\/\s*v|Về\s*việc)\s*[:.\-]?\s*/i, "");
+    if (text === orig) text = orig.replace(/^.{3,8}?[:.]\s*/, "");
+    var rest = collect(full, k + 1, 5, "vv");
+    return capFirst((text + " " + rest.join(" ")).replace(/\s+/g, " ").trim());
+  }
+
+  function findTrichYeu(full) {
+    var lim = Math.min(full.length, 30);
+    for (var k = 0; k < lim; k++) {
+      var p = plain(full[k].text);
+      if (isVv(p)) return takeVv(full, k);
+      if (isLoai(p)) {
+        if (k + 1 < full.length && isVv(plain(full[k + 1].text))) return takeVv(full, k + 1);
+        var lines = collect(full, k + 1, 6, "loai").map(sentenceCase);
         if (!lines.length) return "";
         var res = lines.join(" ");
         if (CONFIG.includeLoaiVanBan) res = sentenceCase(full[k].text) + " " + res.charAt(0).toLowerCase() + res.slice(1);
         return res.replace(/\s+/g, " ").trim();
       }
+      if (/^(kinhgui|cancu)/.test(p)) return "";
     }
     return "";
   }
@@ -267,17 +297,19 @@
     var full = toLines(items);
     var left = toLines(items.filter(function (i) { return i.x < width * 0.48; }));
     var right = toLines(items.filter(function (i) { return i.x >= width * 0.45; }));
+    var endY = headerEndY(full);
+    var fz = zone(full, endY), lz = zone(left, endY), rz = zone(right, endY);
     var out = { so: "", kyhieu: "", ngay: "", coquan: "", trichyeu: "" };
 
-    var so = findSo(left, full);
+    var so = findSo(lz, fz);
     if (so) { out.so = so.so; out.kyhieu = cleanName(so.kyhieu); }
-    var soY = so ? so.y : null;
-    out.ngay = findDate(full, right);
-    out.coquan = findAgency(left, soY);
-    out.trichyeu = cleanName(findTrichYeu(full, soY));
+    out.ngay = findDate(fz, rz);
+    out.coquan = findAgency(lz, so ? so.y : null);
+    out.trichyeu = cleanName(findTrichYeu(full));
 
-    out.debug = "Văn bản đọc được (B = chữ đậm):\n" + full.slice(0, 30).map(function (l, i) {
-      return (i + 1) + (l.bold ? " [B] " : "     ") + l.text;
+    out.debug = "Văn bản đọc được (B = chữ đậm, ---- = hết phần đầu trang):\n" + full.slice(0, 30).map(function (l, i) {
+      var mark = (l.y > endY + 1) ? "" : "";
+      return (i + 1) + (l.bold ? " [B] " : "     ") + l.text + (l.y === endY ? "   <---- hết phần đầu" : "");
     }).join("\n");
     return out;
   }
