@@ -37,8 +37,9 @@
   <label for="coquan">Tên cơ quan ban hành</label><input id="coquan">
   <label for="trichyeu">Nội dung phần trích yếu</label><textarea id="trichyeu"></textarea>
   <label for="tenfile">Tên file PDF (để đổi tên file)</label>
-  <div style="display:flex;gap:6px"><input id="tenfile" style="flex:1"><button id="btnCopy" type="button" style="flex:none;padding:6px 12px;background:#2b6cb0;color:#fff">Sao chép</button></div>
+  <textarea id="tenfile" style="min-height:76px"></textarea>
   <div id="fileNote" style="font-size:12px;margin-top:4px;color:#666">Số ký tự: 0 / 150 (chưa tính đuôi .pdf)</div>
+  <button id="btnCopy" type="button" style="width:100%;flex:none;margin-top:8px;padding:8px;background:#2b6cb0;color:#fff">Sao chép tên file</button>
   <details style="margin-top:12px;font-size:12px"><summary>Cài đặt AI Claude (tùy chọn, chính xác hơn)</summary>
     <label style="font-weight:400"><input type="checkbox" id="useAI" style="width:auto"> Dùng AI Claude để đọc công văn</label>
     <label for="apiKey">API key (sk-ant-...)</label><input id="apiKey" type="password" autocomplete="off">
@@ -55,6 +56,6 @@
   <p>Bấm vào ô đầu tiên của hàng cần ghi trong Excel.<br>Dữ liệu sẽ tự điền sang phải.</p>
   <button id="btnBack">Quay lại</button>
 </div>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

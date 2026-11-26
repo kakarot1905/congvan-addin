@@ -6,7 +6,7 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var VERSION = "10";
+  var VERSION = "11";
   var FIELDS = ["so", "kyhieu", "ngay", "coquan", "trichyeu"];
   var pending = null;
 
@@ -47,7 +47,11 @@
       $("btnSave").addEventListener("click", onSave);
       FIELDS.forEach(function (f) { $(f).addEventListener("input", updateFileName); });
       $("btnCopy").addEventListener("click", copyFileName);
-      $("tenfile").addEventListener("input", function () { tenfileManual = true; updateFileNote(); });
+      $("tenfile").addEventListener("input", function () {
+        var el = $("tenfile");
+        if (/[\r\n]/.test(el.value)) el.value = el.value.replace(/[\r\n]+/g, " "); // tên file không được xuống dòng
+        tenfileManual = true; updateFileNote();
+      });
       updateFileNote();
       $("btnBack").addEventListener("click", function () { stopWaiting(); });
     });
