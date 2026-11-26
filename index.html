@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nhập công văn đến</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  body{font-family:"Segoe UI",Arial,sans-serif;margin:0;padding:12px;font-size:14px;color:#222}
+  h1{font-size:16px;margin:0 0 10px}
+  #drop{border:2px dashed #888;border-radius:8px;padding:18px 8px;text-align:center;cursor:pointer;background:#fafafa}
+  #drop.over{background:#e6f0ff;border-color:#2b6cb0}
+  #status{margin:8px 0;font-size:12.5px;min-height:18px}
+  #status.ok{color:#1a7f37}#status.warn{color:#b45309}#status.err{color:#c62828}
+  label{display:block;margin:8px 0 2px;font-weight:600;font-size:13px}
+  input,textarea{width:100%;box-sizing:border-box;padding:6px;font:inherit;border:1px solid #bbb;border-radius:4px}
+  textarea{min-height:90px;resize:vertical}
+  .row{display:flex;gap:8px;margin-top:14px}
+  button{flex:1;padding:9px;font:inherit;border:0;border-radius:4px;cursor:pointer}
+  #btnSave{background:#2b6cb0;color:#fff}
+  #btnCancel,#btnBack{background:#e5e5e5}
+  #wait{display:none;text-align:center;padding:30px 8px}
+  #wait .big{font-size:20px;font-weight:700;color:#2b6cb0;margin-bottom:8px}
+</style>
+</head>
+<body>
+<div id="formView">
+  <h1>Nhập công văn đến</h1>
+  <div id="drop">Kéo thả file PDF vào đây<br>hoặc bấm để chọn file</div>
+  <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+  <div id="status"></div>
+  <label for="so">Số văn bản</label><input id="so">
+  <label for="kyhieu">Ký hiệu văn bản</label><input id="kyhieu">
+  <label for="trichyeu">Nội dung trích yếu</label><textarea id="trichyeu"></textarea>
+  <label for="coquan">Tên cơ quan ban hành</label><input id="coquan">
+  <label for="ngay">Ngày ban hành (dd/mm/yyyy)</label><input id="ngay" placeholder="dd/mm/yyyy">
+  <div class="row"><button id="btnSave">Lưu</button><button id="btnCancel">Huỷ bỏ</button></div>
+</div>
+<div id="wait">
+  <div class="big">Chọn vị trí lưu</div>
+  <p>Bấm vào ô đầu tiên của hàng cần ghi trong Excel.<br>Dữ liệu sẽ tự điền sang phải.</p>
+  <button id="btnBack">Quay lại</button>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
