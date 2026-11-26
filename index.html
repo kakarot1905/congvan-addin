@@ -36,6 +36,13 @@
   <label for="ngay">Ngày ban hành văn bản (dd/mm/yyyy)</label><input id="ngay" placeholder="dd/mm/yyyy">
   <label for="coquan">Tên cơ quan ban hành</label><input id="coquan">
   <label for="trichyeu">Nội dung phần trích yếu</label><textarea id="trichyeu"></textarea>
+  <details style="margin-top:12px;font-size:12px"><summary>Cài đặt AI Claude (tùy chọn, chính xác hơn)</summary>
+    <label style="font-weight:400"><input type="checkbox" id="useAI" style="width:auto"> Dùng AI Claude để đọc công văn</label>
+    <label for="apiKey">API key (sk-ant-...)</label><input id="apiKey" type="password" autocomplete="off">
+    <label for="aiModel">Mô hình</label>
+    <select id="aiModel" style="width:100%;padding:6px"><option value="claude-sonnet-5-5">Sonnet 5.5 (chính xác hơn)</option><option value="claude-haiku-5-5">Haiku 5.5 (rẻ, nhanh hơn)</option></select>
+    <p style="color:#b45309;margin:6px 0">Khi bật, ảnh phần đầu trang 1 của công văn được gửi qua Internet tới Anthropic để xử lý. KHÔNG bật với văn bản mật hoặc nội bộ chưa được phép. API key chỉ lưu trên máy này.</p>
+  </details>
   <details id="dbgBox" style="margin-top:12px;font-size:12px"><summary>Xem văn bản đọc được (để kiểm tra)</summary><pre id="dbg" style="white-space:pre-wrap;word-break:break-word;font-size:11px"></pre></details>
   <div class="row"><button id="btnSave">Lưu</button><button id="btnCancel">Huỷ bỏ</button></div>
 </div>
@@ -45,6 +52,6 @@
   <p>Bấm vào ô đầu tiên của hàng cần ghi trong Excel.<br>Dữ liệu sẽ tự điền sang phải.</p>
   <button id="btnBack">Quay lại</button>
 </div>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
