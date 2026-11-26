@@ -57,6 +57,59 @@
     return map;
   }
 
+  // ---------- OCR cho PDF scan ----------
+  var ocrWorker = null, ocrCb = null;
+  var OCR_TEXT = {
+    "loading tesseract core": "Đang tải bộ OCR",
+    "initializing tesseract": "Đang khởi tạo OCR",
+    "loading language traineddata": "Đang tải dữ liệu tiếng Việt (lần đầu hơi lâu)",
+    "initializing api": "Đang khởi tạo OCR",
+    "recognizing text": "Đang nhận dạng chữ"
+  };
+
+  async function getOcrWorker() {
+    if (ocrWorker) return ocrWorker;
+    if (typeof Tesseract === "undefined") throw new Error("Không tải được bộ OCR (cần có Internet).");
+    ocrWorker = await Tesseract.createWorker("vie", 1, {
+      logger: function (m) { if (ocrCb) ocrCb(m); }
+    });
+    return ocrWorker;
+  }
+
+  // Render trang 1 thành ảnh, OCR phần đầu trang (60% phía trên), trả về các "từ" có toạ độ như khi đọc PDF có chữ
+  async function ocrItems(page) {
+    var scale = 3;
+    var vp = page.getViewport({ scale: scale });
+    var canvas = document.createElement("canvas");
+    canvas.width = Math.floor(vp.width);
+    canvas.height = Math.floor(vp.height);
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport: vp }).promise;
+    ocrCb = function (m) {
+      var label = OCR_TEXT[m.status] || "Đang xử lý OCR";
+      var pct = (typeof m.progress === "number") ? " " + Math.round(m.progress * 100) + "%" : "";
+      setStatus(label + pct + "...", "");
+    };
+    var worker = await getOcrWorker();
+    var res = await worker.recognize(canvas, {
+      rectangle: { left: 0, top: 0, width: canvas.width, height: Math.floor(canvas.height * 0.6) }
+    });
+    ocrCb = null;
+    var words = (res && res.data && res.data.words) || [];
+    return words.filter(function (w) {
+      return w.text && w.text.trim() && w.confidence >= 30;
+    }).map(function (w) {
+      var bb = w.bbox;
+      return {
+        s: w.text,
+        x: bb.x0 / scale,
+        y: (canvas.height - (bb.y0 + bb.y1) / 2) / scale, // tâm dòng, ổn định hơn đáy chữ
+        w: (bb.x1 - bb.x0) / scale,
+        h: (bb.y1 - bb.y0) / scale,
+        b: false
+      };
+    });
+  }
+
   async function handleFile(file) {
     if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
       setStatus("Chỉ hỗ trợ file PDF.", "err"); return;
@@ -74,17 +127,28 @@
         .map(function (i) {
           return { s: i.str, x: i.transform[4], y: i.transform[5], w: i.width, h: i.height, b: !!boldMap[i.fontName] };
         });
-      if (!items.length) {
-        clearForm();
-        setStatus("Không đọc được chữ trong file (có thể là PDF scan). Hãy điền tay.", "warn");
-        return;
+      var totalChars = items.reduce(function (n, i) { return n + i.s.replace(/\s/g, "").length; }, 0);
+      var scanned = false;
+      if (totalChars < 80) {
+        // Không có lớp chữ -> PDF scan -> dùng OCR
+        scanned = true;
+        setStatus("PDF này là bản scan, đang nhận dạng chữ (OCR). Lần đầu có thể mất 30-60 giây...", "");
+        items = await ocrItems(page);
+        if (!items.length) {
+          clearForm();
+          $("dbg").textContent = "";
+          setStatus("OCR không nhận dạng được chữ. Hãy điền tay.", "warn");
+          return;
+        }
       }
       var r = parse(items, width);
       FIELDS.forEach(function (f) { $(f).value = r[f] || ""; });
-      $("dbg").textContent = r.debug;
+      $("dbg").textContent = (scanned ? "(Đã dùng OCR cho file scan)\n" : "") + r.debug;
       var empty = FIELDS.filter(function (f) { return !r[f]; }).length;
-      setStatus(empty ? "Đã điền tự động, còn " + empty + " ô trống - vui lòng kiểm tra." :
-        "Đã điền đủ các ô - vui lòng kiểm tra lại trước khi lưu.", empty ? "warn" : "ok");
+      var msg = empty ? "Đã điền tự động, còn " + empty + " ô trống - vui lòng kiểm tra." :
+        "Đã điền đủ các ô - vui lòng kiểm tra lại trước khi lưu.";
+      if (scanned) msg += " (File scan: OCR có thể sai dấu/chữ, hãy kiểm tra kỹ.)";
+      setStatus(msg, empty || scanned ? "warn" : "ok");
     } catch (e) {
       setStatus("Lỗi đọc file: " + (e && e.message ? e.message : e), "err");
     }
@@ -105,7 +169,7 @@
     var sorted = items.slice().sort(function (a, b) { return b.y - a.y || a.x - b.x; });
     var clusters = [], cur = null;
     sorted.forEach(function (it) {
-      if (!cur || Math.abs(cur.y - it.y) > 3) { cur = { y: it.y, parts: [] }; clusters.push(cur); }
+      if (!cur || Math.abs(cur.y - it.y) > Math.max(3, 0.4 * (it.h || 0))) { cur = { y: it.y, parts: [] }; clusters.push(cur); }
       cur.parts.push(it);
     });
     return clusters.map(function (l) {
@@ -158,7 +222,7 @@
     "giaymoi", "thumoi", "congdien", "chuongtrinh", "dean", "phuongan", "quyche", "quydinh", "bienban",
     "hopdong", "thoathuan", "thongcao", "ketluan", "thongtri", "giaygioithieu", "thungo", "nghidinh"];
 
-  function isVv(p) { return /^(v\/v|veviec)/.test(p); }
+  function isVv(p) { return /^(v[\/l|1!]v|veviec)/.test(p); }
   function isLoai(p) { return LOAI.indexOf(p.replace(/[:.]+$/, "")) >= 0; }
 
   function isAllUpper(t) {
@@ -185,9 +249,9 @@
   function findSo(left, full) {
     var i, t, m;
     for (i = 0; i < left.length; i++) {
-      if (/^so[:;.]?[.…_]*\d*[.…_]*\//.test(plain(left[i].text))) {
+      if (/^s[o0][:;.,]?[.…_]*\d*[.…_]*[\/|]/.test(plain(left[i].text))) {
         var sq = squeeze(left[i].text).normalize("NFC");
-        m = sq.match(/^S[^\d\/]{0,3}?[:：]?[.…_]*(\d*)[.…_]*\/(.+)$/i);
+        m = sq.match(/^S[^\d\/|]{0,3}?[:：;,]?[.…_]*(\d*)[.…_]*[\/|](.+)$/i);
         if (m) return { so: m[1], kyhieu: fixKy(m[2]), y: left[i].y };
       }
     }
@@ -268,7 +332,7 @@
 
   function takeVv(full, k) {
     var orig = full[k].text;
-    var text = orig.replace(/^\s*(V\s*\/\s*v|Về\s*việc)\s*[:.\-]?\s*/i, "");
+    var text = orig.replace(/^\s*(V\s*[\/l|1!]\s*v|V\S{0,2}\s*vi\S{0,2}c)\s*[:.\-]?\s*/i, "");
     if (text === orig) text = orig.replace(/^.{3,8}?[:.]\s*/, "");
     var rest = collect(full, k + 1, 5, "vv");
     return capFirst((text + " " + rest.join(" ")).replace(/\s+/g, " ").trim());
