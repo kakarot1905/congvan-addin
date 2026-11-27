@@ -6,7 +6,7 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
-  var VERSION = "11";
+  var VERSION = "12";
   var FIELDS = ["so", "kyhieu", "ngay", "coquan", "trichyeu"];
   var pending = null;
 
@@ -580,6 +580,11 @@
     return "";
   }
 
+  // Quốc hiệu / tiêu ngữ / tiêu đề Đảng: so khớp không phụ thuộc dấu, khoảng trắng (HÒA = HOÀ = HOA)
+  function isQuocHieu(t) {
+    return /conghoa|xahoichunghia|doclap|tudo-?hanhphuc|hanhphuc|dangcongsanvietnam/.test(plain(t));
+  }
+
   // ---------- Cơ quan ban hành ----------
   var PARENT = /^(ĐẢNG BỘ|ĐẢNG ỦY|BỘ|UBND|ỦY BAN|CHÍNH PHỦ|QUỐC HỘI|TỈNH|THÀNH PHỐ|THÀNH ỦY|TỈNH ỦY|HUYỆN ỦY|QUẬN ỦY|HUYỆN|QUẬN|THỊ XÃ|SỞ|TỔNG LIÊN ĐOÀN)(\s|$)/;
 
@@ -587,7 +592,7 @@
     var cand = left.filter(function (l) {
       if (soY !== null && l.y <= soY + 3) return false;
       if (/^[-–—_.\s]+$/.test(l.text)) return false;
-      if (/C[ỘO]NG H[ÒO]A|Đ[ỘO]C L[ẬA]P/i.test(l.text)) return false;
+      if (isQuocHieu(l.text)) return false;
       if (/^so[:;.]?[.…_]*\d*[.…_]*\//.test(plain(l.text))) return false;
       if (/^[^\d]{0,5}\d{1,6}[\/|\-–][A-ZĐ]/.test(squeeze(l.text))) return false;
       if (soY === null && !isAllUpper(l.text)) return false;
@@ -605,6 +610,7 @@
       chosen = cand;
     }
     var name = chosen.map(function (l) { return l.text; }).join(" ").replace(/\s+/g, " ").trim();
+    if (isQuocHieu(name)) return ""; // chốt chặn: tuyệt đối không nhận Quốc hiệu làm tên cơ quan
     return CONFIG.agencyTitleCase ? titleCaseVN(name) : name;
   }
 
@@ -612,10 +618,17 @@
   // mode "vv": dừng ở dòng IN HOA (vd "GIÁM ĐỐC HỌC VIỆN...") hoặc "Căn cứ/Kính gửi"
   // mode "loai": dòng đầu được IN HOA, nhưng dừng khi chuyển từ chữ thường sang IN HOA
   function collect(full, from, max, mode) {
-    var out = [], prevUpper = null;
+    var out = [], prevUpper = null, ls = null;
+    var prevY = from > 0 ? full[from - 1].y : null;
     for (var n = from; n < full.length && out.length < max; n++) {
       var t = full[n].text;
       if (isStop(t)) break;
+      if (prevY !== null) {                       // dừng khi sang đoạn mới (khoảng cách dòng tăng vọt)
+        var gap = prevY - full[n].y;
+        if (ls === null) { if (gap > 34) break; ls = Math.max(gap, 8); }
+        else if (gap > ls * 1.9 + 2) break;
+      }
+      prevY = full[n].y;
       var up = isAllUpper(t);
       if (mode === "vv" && up) break;
       if (mode === "loai" && up && prevUpper === false) break;
@@ -631,7 +644,7 @@
     var text = orig.replace(/^\s*(V\s*[\/l|1!]\s*v|V\S{0,2}\s*vi\S{0,2}c)\s*[:.\-]?\s*/i, "");
     if (text === orig) text = orig.replace(/^.{3,8}?[:.]\s*/, "");
     text = text.replace(/^(V\S{0,2}\s*vi\S{0,2}c)\s*[:.\-]?\s*/i, "");
-    var rest = collect(full, k + 1, 5, "vv");
+    var rest = collect(full, k + 1, 12, "vv");
     return capFirst((text + " " + rest.join(" ")).replace(/\s+/g, " ").trim());
   }
 
@@ -642,7 +655,7 @@
       if (isVv(p)) return takeVv(full, k);
       if (isLoai(p)) {
         if (k + 1 < full.length && isVv(plain(full[k + 1].text))) return takeVv(full, k + 1);
-        var lines = collect(full, k + 1, 6, "loai").map(sentenceCase);
+        var lines = collect(full, k + 1, 8, "loai").map(sentenceCase);
         if (!lines.length) return "";
         var res = lines.join(" ");
         if (CONFIG.includeLoaiVanBan) res = sentenceCase(full[k].text) + " " + res.charAt(0).toLowerCase() + res.slice(1);
@@ -657,8 +670,15 @@
   function parse(items, width) {
     var full = toLines(items);
     var segs = toSegments(items);
-    var left = segs.filter(function (l) { return l.x < width * 0.48; });
-    var right = segs.filter(function (l) { return l.x >= width * 0.45; });
+    // Vị trí cột phải = vị trí dòng Quốc hiệu "CỘNG HÒA XÃ HỘI..." (nếu tìm thấy ở đầu trang)
+    var qx = null;
+    segs.slice(0, 10).forEach(function (l) {
+      if (l.x >= width * 0.3 && isQuocHieu(l.text)) qx = qx === null ? l.x : Math.min(qx, l.x);
+    });
+    var cutL = qx !== null ? qx - 8 : width * 0.48;
+    var cutR = qx !== null ? qx - 8 : width * 0.45;
+    var left = segs.filter(function (l) { return l.x < cutL && !isQuocHieu(l.text); });
+    var right = segs.filter(function (l) { return l.x >= cutR; });
     var endY = headerEndY(full);
     var fz = zone(full, endY), lz = zone(left, endY), rz = zone(right, endY);
     var out = { so: "", kyhieu: "", ngay: "", coquan: "", trichyeu: "" };
